@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	yamlpath "pathwise/pkg/yaml"
+	yamlpath "github.com/GP-09/pathwise/pkg/yaml"
 )
 
 func TestParse(t *testing.T) {

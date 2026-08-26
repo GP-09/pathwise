@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"pathwise/internal/pathtree"
+	"github.com/GP-09/pathwise/internal/pathtree"
 )
 
 type JSON struct {

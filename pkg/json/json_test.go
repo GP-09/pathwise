@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	jsonpath "pathwise/pkg/json"
+	jsonpath "github.com/GP-09/pathwise/pkg/json"
 )
 
 func TestParse(t *testing.T) {

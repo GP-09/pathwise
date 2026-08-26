@@ -1,7 +1,7 @@
 package yamlpath
 
 import (
-	"pathwise/internal/pathtree"
+	"github.com/GP-09/pathwise/internal/pathtree"
 
 	"gopkg.in/yaml.v3"
 )
