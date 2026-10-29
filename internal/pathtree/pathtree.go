@@ -59,15 +59,20 @@ func (d Document) With(opts ...Option) Getter {
 		opt(&cfg)
 	}
 
-	return Getter{doc: d, cfg: cfg}
+	g := Getter{doc: d, cfg: cfg}
+	if cfg.legacy {
+		g.legacy = &legacyNode{value: d.value}
+	}
+	return g
 }
 
 // Getter performs Get operations using a fixed configuration produced by
 // With. It is read-only and safe to reuse across multiple Get calls,
 // including concurrently.
 type Getter struct {
-	doc Document
-	cfg config
+	doc    Document
+	cfg    config
+	legacy *legacyNode
 }
 
 // Get returns values for the supplied dot-separated paths, applying whatever
@@ -88,11 +93,35 @@ func (g Getter) Get(paths ...string) map[string]any {
 		w.dropped = make(map[string]struct{})
 	}
 
-	w.traverse(g.doc.value, buildTrie(paths))
+	if g.cfg.legacy {
+		var seen map[string]bool
+		if len(paths) > 1 {
+			seen = make(map[string]bool, len(paths))
+		}
+		for _, path := range paths {
+			if seen != nil {
+				if seen[path] {
+					continue
+				}
+				seen[path] = true
+			}
+			if value, found := g.legacy.resolve(strings.Split(path, "."), g.cfg.onPathError); found {
+				w.emit(path, value)
+			}
+		}
+	} else if len(paths) == 1 {
+		if validPath(paths[0]) {
+			if value, found := singlePath(g.doc.value, paths[0]); found {
+				w.emit(paths[0], value)
+			}
+		}
+	} else {
+		w.traverse(g.doc.value, buildTrie(paths))
+	}
 
 	if g.cfg.onMissing != nil {
 		for _, path := range paths {
-			if path == "" {
+			if path == "" && !g.cfg.legacy {
 				continue
 			}
 
@@ -115,8 +144,11 @@ func (g Getter) Get(paths ...string) map[string]any {
 type Option func(*config)
 
 type config struct {
-	transform func(path string, value any) (any, bool)
-	onMissing func(path string) any
+	transform   func(path string, value any) (any, bool)
+	onMissing   func(path string) any
+	legacy      bool
+	borrow      bool
+	onPathError func(error)
 }
 
 // WithTransform overrides how each raw value is placed into the result map.
@@ -134,6 +166,22 @@ func WithDefault(fn func(path string) any) Option {
 		c.onMissing = fn
 	}
 }
+
+// WithLegacyPaths opts into case-insensitive, longest literal dotted-key
+// matching, loose array indices, encoded JSON descent and scalar continuation.
+// The optional callback reports invalid array-index syntax.
+func WithLegacyPaths(onError ...func(error)) Option {
+	return func(c *config) {
+		c.legacy = true
+		if len(onError) > 0 {
+			c.onPathError = onError[0]
+		}
+	}
+}
+
+// WithBorrowedValues preserves native container identity. The source must stay
+// read-only while the getter is in use. Default lookups continue to copy values.
+func WithBorrowedValues() Option { return func(c *config) { c.borrow = true } }
 
 type trieNode struct {
 	children map[string]*trieNode
@@ -211,18 +259,7 @@ type walk struct {
 // nil. So trie is always non-nil here.
 func (w *walk) traverse(value any, trie *trieNode) {
 	if trie.path != "" {
-		resolved := resolveValue(value)
-		include := true
-
-		if w.cfg.transform != nil {
-			resolved, include = w.cfg.transform(trie.path, resolved)
-		}
-
-		if include {
-			w.result[trie.path] = resolved
-		} else if w.dropped != nil {
-			w.dropped[trie.path] = struct{}{}
-		}
+		w.emit(trie.path, value)
 	}
 
 	if len(trie.children) == 0 {
@@ -236,19 +273,60 @@ func (w *walk) traverse(value any, trie *trieNode) {
 			if !ok {
 				continue
 			}
-
 			w.traverse(child, trieChild)
 		}
-
 	case []any:
 		for key, trieChild := range trie.children {
 			index, ok := arrayIndex(key)
 			if !ok || index >= len(value) {
 				continue
 			}
-
 			w.traverse(value[index], trieChild)
 		}
+	}
+}
+
+func (w *walk) emit(path string, value any) {
+	resolved := value
+	if !w.cfg.borrow {
+		resolved = resolveValue(value)
+	}
+	include := true
+
+	if w.cfg.transform != nil {
+		resolved, include = w.cfg.transform(path, resolved)
+	}
+
+	if include {
+		w.result[path] = resolved
+	} else if w.dropped != nil {
+		w.dropped[path] = struct{}{}
+	}
+}
+
+func singlePath(value any, path string) (any, bool) {
+	for {
+		key, remaining, more := strings.Cut(path, ".")
+		switch current := value.(type) {
+		case map[string]any:
+			var found bool
+			value, found = current[key]
+			if !found {
+				return nil, false
+			}
+		case []any:
+			index, ok := arrayIndex(key)
+			if !ok || index >= len(current) {
+				return nil, false
+			}
+			value = current[index]
+		default:
+			return nil, false
+		}
+		if !more {
+			return value, true
+		}
+		path = remaining
 	}
 }
 

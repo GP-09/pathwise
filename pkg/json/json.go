@@ -3,6 +3,8 @@ package jsonpath
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 
 	"github.com/GP-09/pathwise/internal/pathtree"
 )
@@ -19,6 +21,17 @@ type Option = pathtree.Option
 type Getter = pathtree.Getter
 
 func Parse(data []byte) (JSON, error) {
+	return ParseWithOptions(data, ParseOptions{})
+}
+
+// ParseOptions provides opt-in validation without changing Parse's defaults.
+type ParseOptions struct {
+	RequireSingleValue bool
+	RequireObject      bool
+	ValidateFloat64    bool
+}
+
+func ParseWithOptions(data []byte, options ParseOptions) (JSON, error) {
 	var value any
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -27,11 +40,58 @@ func Parse(data []byte) (JSON, error) {
 	if err := decoder.Decode(&value); err != nil {
 		return JSON{}, err
 	}
+	if options.RequireSingleValue {
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			if err != nil {
+				return JSON{}, err
+			}
+			return JSON{}, fmt.Errorf("multiple JSON values")
+		}
+	}
+	if options.RequireObject && value != nil {
+		if _, ok := value.(map[string]any); !ok {
+			return JSON{}, fmt.Errorf("JSON root must be an object or null")
+		}
+	}
+	if options.ValidateFloat64 {
+		if err := validateFloat64(value); err != nil {
+			return JSON{}, err
+		}
+	}
 
 	return JSON{
 		doc: pathtree.NewDocument(value),
 	}, nil
 }
+
+func validateFloat64(value any) error {
+	switch value := value.(type) {
+	case json.Number:
+		_, err := value.Float64()
+		return err
+	case map[string]any:
+		for _, child := range value {
+			if err := validateFloat64(child); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if err := validateFloat64(child); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// FromValue is for already-decoded native metadata; it performs no JSON
+// conversion. Keep the source read-only while a getter is in use.
+func FromValue(value any) JSON { return JSON{doc: pathtree.NewDocument(value)} }
+
+func WithLegacyPaths(onError ...func(error)) Option { return pathtree.WithLegacyPaths(onError...) }
+func WithBorrowedValues() Option                    { return pathtree.WithBorrowedValues() }
 
 // Get returns values for the supplied dot-separated paths.
 func (j JSON) Get(paths ...string) map[string]any {
