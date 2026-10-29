@@ -18,8 +18,8 @@ values := j.Get("hello.world.name", "hello.world.age")
 
 | Package | Import | Format |
 |---|---|---|
-| `pkg/json` | `jsonpath "pathwise/pkg/json"` | JSON |
-| `pkg/yaml` | `yamlpath "pathwise/pkg/yaml"` | YAML |
+| `pkg/json` | `jsonpath "github.com/GP-09/pathwise/pkg/json"` | JSON |
+| `pkg/yaml` | `yamlpath "github.com/GP-09/pathwise/pkg/yaml"` | YAML |
 | `internal/pathtree` | not importable outside this module | shared engine |
 
 `pkg/json` and `pkg/yaml` expose the **same API shape** — only the decoding
@@ -120,7 +120,7 @@ values := j.With(
 
 ### Decoding embedded/encoded strings (e.g. base64+JSON)
 
-`Get` never implicitly parses string contents — a base64 string stays a
+Default `Get` never implicitly parses string contents — a base64 string stays a
 string unless you decode it yourself via `WithTransform`:
 
 ```go
@@ -171,6 +171,45 @@ To support another format (e.g. TOML), add `pkg/toml/toml.go` that:
    `pkg/json/json.go`.
 
 No changes to `internal/pathtree` are needed; it's already format-agnostic.
+
+## Migration compatibility
+
+The existing `Parse`, `Get`, transforms and defaults keep their original
+behavior. Applications migrating from loose path traversal can opt in:
+
+```go
+doc, err := jsonpath.ParseWithOptions(data, jsonpath.ParseOptions{
+    RequireSingleValue: true,
+    RequireObject:     true, // objects and null; rejects arrays/scalar roots
+    ValidateFloat64:   true, // reject numbers outside float64 range
+})
+if err != nil { /* report invalid metadata */ }
+getter := doc.With(
+    jsonpath.WithLegacyPaths(),
+    jsonpath.WithTransform(convertNumbers), // called on selected output values
+)
+values := getter.Get("document.status", "items.01")
+```
+
+`WithLegacyPaths` enables case-insensitive keys, longest literal dotted-key
+precedence, empty-key paths, signed/zero-padded array indices, descent through
+JSON/base64/URL-encoded strings, and legacy scalar continuation. Its optional
+error callback reports invalid array-index syntax. Case-insensitive collisions
+retain map-iteration ambiguity; applications should avoid ambiguous source keys.
+
+`WithTransform` changes returned values, not path navigation. A selected string
+is not decoded just because it contains JSON; encoded JSON is decoded only when
+a legacy path continues inside it. Default traversal remains strict.
+
+Use `FromValue` for metadata already decoded into native Go values. It avoids a
+JSON round-trip and keeps native numeric types. `WithBorrowedValues` explicitly
+preserves container identity for native callers; the source must remain
+read-only while the getter is used. Default results still copy containers.
+
+Compatibility state belongs to the parsed document: object key indexes and
+intermediate encoded documents. There are no compiled-query APIs or caches of
+application conditions/field values. A single-path `Get` avoids allocating a
+temporary trie; multi-path `Get` keeps shared-prefix traversal.
 
 ## Running tests
 

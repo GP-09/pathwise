@@ -17,6 +17,10 @@ type Option = pathtree.Option
 // With. It is safe to reuse across multiple Get calls.
 type Getter = pathtree.Getter
 
+func FromValue(value any) YAML                      { return YAML{doc: pathtree.NewDocument(value)} }
+func WithLegacyPaths(onError ...func(error)) Option { return pathtree.WithLegacyPaths(onError...) }
+func WithBorrowedValues() Option                    { return pathtree.WithBorrowedValues() }
+
 func Parse(data []byte) (YAML, error) {
 	var value any
 
